@@ -184,7 +184,7 @@ if __name__ == "__main__":
     )
 
     async_process.start()
-    time.sleep(10)  # Даем процессу поработать 10 секунд.
+    time.sleep(5)  # Даем процессу поработать 5 секунд.
     stop_signal.set()  # Устанавливаем сигнал остановки.
     async_process.join()
     print("Асинхронные операции завершены.")
