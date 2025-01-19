@@ -1,182 +1,190 @@
-import multiprocessing  # Для организации параллельных процессов
-import random  # Для генерации случайных чисел
-import time    # Для имитации времени работы и пауз
-import sys     # Для работы с аргументами командной строки
-import threading  # Для запуска потока ввода команды
-import queue as Queue  # Для безопасной передачи данных между потоками
-import signal  # Для обработки сигналов прерывания
+# ИСАДИЧЕВА ДАРЬЯ, ДПИ22-1
 
-# Функция генерации случайной квадратной матрицы заданного размера
-def generate_random_matrix(size):
-    """
-    Генерирует случайную квадратную матрицу заданного размера.
-    """
-    # Создаем матрицу с помощью вложенных списков
-    matrix = []
-    for _ in range(size):
-        # Генерируем строку матрицы
-        row = [random.randint(0, 10) for _ in range(size)]
-        matrix.append(row)
-    return matrix
+import random
+import multiprocessing
+import os
+import time
 
-# Процесс-генератор матриц
-def matrix_generator(queue, size, stop_event):
+def calculate_element_and_save(index, matrix_a, matrix_b, temp_file):
     """
-    Генерирует пары случайных матриц и отправляет их в очередь для перемножения.
-    """
-    print("Запуск процесса генерации матриц.")
-    try:
-        while not stop_event.is_set():
-            # Генерируем две случайные матрицы
-            A = generate_random_matrix(size)
-            B = generate_random_matrix(size)
-            # Отправляем пару матриц в очередь
-            queue.put((A, B))
-            print("Сгенерированы две матрицы и отправлены в очередь.")
-            # Имитация задержки между генерациями
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("Процесс генерации матриц прерван.")
-    finally:
-        # После остановки генерации отправляем специальный сигнал (None) для завершения работы умножителя
-        queue.put(None)
-        print("Остановка процесса генерации матриц.")
+    Вычисляет один элемент результирующей матрицы по указанным индексам и сохраняет его в файл.
 
-# Процесс перемножения матриц
-def matrix_multiplier(queue, stop_event):
+    Параметры:
+        index (tuple): Индексы элемента (строка, столбец) в результирующей матрице.
+        matrix_a (list): Первая матрица.
+        matrix_b (list): Вторая матрица.
+        temp_file (str): Путь к временному файлу для записи промежуточных результатов.
     """
-    Получает пары матриц из очереди, перемножает их и записывает результат в файл.
-    """
-    print("Запуск процесса перемножения матриц.")
-    try:
-        # Открываем файл для записи результатов
-        with open('multiplication_results.txt', 'w') as result_file:
-            while True:
-                # Проверяем, установлен ли сигнал остановки и пуста ли очередь
-                if stop_event.is_set() and queue.empty():
-                    break
-                try:
-                    # Устанавливаем таймаут, чтобы можно было проверить stop_event
-                    matrices = queue.get(timeout=1)
-                except Queue.Empty:
-                    continue
-                # Проверяем специальный сигнал для завершения работы
-                if matrices is None:
-                    print("Получен сигнал завершения умножения.")
-                    break
-                A, B = matrices
-                # Проверяем возможность перемножения матриц
-                if len(A[0]) != len(B):
-                    print("Матрицы не могут быть перемножены: число столбцов A не равно числу строк B")
-                    continue
-                # Перемножаем матрицы
-                result_matrix = multiply_matrices(A, B)
-                # Записываем результат в файл
-                write_matrix_to_file(result_matrix, result_file)
-                print("Матрицы перемножены и результат записан в файл.")
-    except KeyboardInterrupt:
-        print("Процесс перемножения матриц прерван.")
-    finally:
-        print("Остановка процесса перемножения матриц.")
+    row, col = index
+    element_value = 0
+    matrix_size = len(matrix_a[0])  # Размер строки в первой матрице (равен числу столбцов).
 
-# Функция перемножения двух матриц
-def multiply_matrices(A, B):
+    # Вычисление значения элемента как суммы произведений элементов строки и столбца.
+    for k in range(matrix_size):
+        element_value += matrix_a[row][k] * matrix_b[k][col]
+
+    # Сохранение результата в файл (добавление новой строки).
+    with open(temp_file, 'a') as file:
+        file.write(f"{row} {col} {element_value}\n")
+
+    return row, col, element_value
+
+
+def multiply_matrices(matrix_a, matrix_b, num_workers, temp_file):
     """
-    Перемножает две матрицы A и B.
+    Перемножает две матрицы с использованием многопоточности, записывая промежуточные результаты в файл.
+
+    Параметры:
+        matrix_a (list): Первая матрица.
+        matrix_b (list): Вторая матрица.
+        num_workers (int): Количество потоков для пула процессов.
+        temp_file (str): Путь к временному файлу для записи промежуточных результатов.
+
+    Возвращает:
+        list: Результирующая матрица после умножения.
     """
-    # Число строк и столбцов результирующей матрицы
-    result_rows = len(A)
-    result_cols = len(B[0])
-    # Инициализируем результирующую матрицу нулями
-    result_matrix = [[0 for _ in range(result_cols)] for _ in range(result_rows)]
-    # Выполняем умножение матриц
-    for i in range(result_rows):
-        for j in range(result_cols):
-            for k in range(len(B)):
-                result_matrix[i][j] += A[i][k] * B[k][j]
+    num_rows, num_cols = len(matrix_a), len(matrix_b[0])  # Размеры результирующей матрицы.
+    task_indices = [(r, c) for r in range(num_rows) for c in range(num_cols)]  # Список задач (индексов элементов).
+
+    # Удаляем временный файл, если он существует.
+    if os.path.exists(temp_file):
+        os.remove(temp_file)
+
+    # Создаём пул процессов для параллельного выполнения.
+    with multiprocessing.Pool(num_workers) as pool:
+        # Параллельно вычисляем элементы матрицы.
+        results = pool.starmap(
+            calculate_element_and_save,
+            [(index, matrix_a, matrix_b, temp_file) for index in task_indices]
+        )
+
+    # Создаём результирующую матрицу и заполняем её вычисленными значениями.
+    result_matrix = [[0 for _ in range(num_cols)] for _ in range(num_rows)]
+    for row, col, value in results:
+        result_matrix[row][col] = value
+
     return result_matrix
 
-# Функция записи матрицы в файл
-def write_matrix_to_file(matrix, file):
-    """
-    Записывает матрицу в файл.
-    """
-    for row in matrix:
-        # Преобразуем числа в строки
-        str_numbers = [str(num) for num in row]
-        # Объединяем числа через пробел и добавляем перевод строки
-        line = ' '.join(str_numbers) + '\n'
-        # Записываем строку в файл
-        file.write(line)
-    # Добавляем разделитель между матрицами
-    file.write('=' * 20 + '\n')
 
-# Функция для обработки пользовательского ввода в отдельном потоке
-def user_input_thread(stop_event):
+def write_matrix_to_file(file_path, matrix):
     """
-    Ожидает ввода команды 'stop' для остановки программы.
+    Сохраняет матрицу в текстовый файл, каждая строка матрицы записывается в отдельную строку файла.
+
+    Параметры:
+        file_path (str): Путь к файлу для сохранения.
+        matrix (list): Матрица для записи.
     """
-    while not stop_event.is_set():
-        try:
-            command = input("Введите 'stop' для остановки программы: ")
-            if command.strip().lower() == 'stop':
-                stop_event.set()
-                print("Инициирована остановка программы.")
-                break
-        except EOFError:
-            break
-        except KeyboardInterrupt:
-            stop_event.set()
-            print("\nПрограмма прервана пользователем.")
-            break
+    with open(file_path, 'w') as file:
+        for row in matrix:
+            file.write(' '.join(map(str, row)) + '\n')
 
-# Функция для обработки сигналов прерывания
-def signal_handler(sig, frame):
-    print("\nПолучен сигнал прерывания. Программа завершается.")
-    # Устанавливаем событие остановки
-    global stop_event
-    stop_event.set()
 
-# Главная функция программы
-def main():
+def load_matrix_from_file(file_path):
     """
-    Основная функция программы.
+    Загружает матрицу из текстового файла, каждая строка файла превращается в строку матрицы.
+
+    Параметры:
+        file_path (str): Путь к файлу с матрицей.
+
+    Возвращает:
+        list: Матрица, считанная из файла.
     """
-    # Глобальное событие остановки
-    global stop_event
-    stop_event = multiprocessing.Event()
+    with open(file_path, 'r') as file:
+        return [list(map(int, line.split())) for line in file]
 
-    # Устанавливаем обработчик сигналов
-    signal.signal(signal.SIGINT, signal_handler)
 
-    # Проверяем наличие аргумента командной строки для размерности матриц
-    if len(sys.argv) != 2:
-        print("Использование: python программа.py размерность_матрицы")
-        sys.exit(1)
-    # Получаем размерность матрицы из аргументов командной строки
-    try:
-        matrix_size = int(sys.argv[1])
-    except ValueError:
-        print("Размерность матрицы должна быть целым числом.")
-        sys.exit(1)
-    # Создаем очередь для передачи матриц между процессами
-    queue = multiprocessing.Queue()
-    # Создаем процессы генерации и умножения матриц
-    generator_process = multiprocessing.Process(target=matrix_generator, args=(queue, matrix_size, stop_event))
-    multiplier_process = multiprocessing.Process(target=matrix_multiplier, args=(queue, stop_event))
-    # Запускаем процессы
-    generator_process.start()
-    multiplier_process.start()
-    # Запускаем поток для ввода команды от пользователя
-    input_thread = threading.Thread(target=user_input_thread, args=(stop_event,))
-    input_thread.start()
-    # Ожидаем завершения потока ввода
-    input_thread.join()
-    # Ожидаем завершения процессов
-    generator_process.join()
-    multiplier_process.join()
-    print("Программа завершена.")
+def create_random_matrix(size):
+    """
+    Создаёт случайную квадратную матрицу заданного размера с элементами от 0 до 10.
 
-# Запускаем главную функцию, если скрипт запущен напрямую
-if __name__ == '__main__':
-    main()
+    Параметры:
+        size (int): Размер матрицы (число строк и столбцов).
+
+    Возвращает:
+        list: Случайная квадратная матрица.
+    """
+    return [[random.randint(0, 10) for _ in range(size)] for _ in range(size)]
+
+
+def async_matrix_tasks(matrix_size, stop_signal, output_folder):
+    """
+    Асинхронно генерирует случайные матрицы, умножает их и сохраняет результаты, пока не установлен сигнал остановки.
+
+    Параметры:
+        matrix_size (int): Размер генерируемых матриц.
+        stop_signal (multiprocessing.Event): Сигнал остановки асинхронных операций.
+        output_folder (str): Папка для сохранения файлов с матрицами и результатами.
+    """
+    iteration = 0
+    temp_file = os.path.join(output_folder, "temp_results.txt")
+
+    # Удаляем временный файл, если он существует.
+    if os.path.exists(temp_file):
+        os.remove(temp_file)
+
+    while not stop_signal.is_set():  # Цикл продолжается, пока не установлен сигнал остановки.
+        iteration += 1
+        matrix_a = create_random_matrix(matrix_size)
+        matrix_b = create_random_matrix(matrix_size)
+
+        # Формируем пути для сохранения сгенерированных матриц.
+        matrix_a_path = os.path.join(output_folder, f"matrix_a_iter{iteration}.txt")
+        matrix_b_path = os.path.join(output_folder, f"matrix_b_iter{iteration}.txt")
+
+        # Сохраняем сгенерированные матрицы в файлы.
+        write_matrix_to_file(matrix_a_path, matrix_a)
+        write_matrix_to_file(matrix_b_path, matrix_b)
+
+        print(f"Итерация {iteration}: Матрицы сохранены в {matrix_a_path} и {matrix_b_path}.")
+
+        # Умножаем матрицы и сохраняем результат.
+        result_matrix = multiply_matrices(matrix_a, matrix_b, os.cpu_count(), temp_file)
+        result_path = os.path.join(output_folder, f"result_matrix_iter{iteration}.txt")
+        write_matrix_to_file(result_path, result_matrix)
+        print(f"Итерация {iteration}: Результат сохранён в {result_path}.")
+
+
+if __name__ == "__main__":
+    # Размер матрицы.
+    matrix_size = 5
+    # Папка для хранения файлов.
+    output_folder = "matrix_data"
+
+    # Создаём папку, если её нет.
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
+    # Генерируем и сохраняем матрицы.
+    matrix_a = create_random_matrix(matrix_size)
+    matrix_b = create_random_matrix(matrix_size)
+    matrix_a_file = os.path.join(output_folder, 'matrix_a.txt')
+    matrix_b_file = os.path.join(output_folder, 'matrix_b.txt')
+    write_matrix_to_file(matrix_a_file, matrix_a)
+    write_matrix_to_file(matrix_b_file, matrix_b)
+
+    print(f"Сгенерированы матрицы и сохранены в {matrix_a_file} и {matrix_b_file}.")
+
+    # Проверяем возможность умножения матриц.
+    if len(matrix_a[0]) != len(matrix_b):
+        raise ValueError("Число столбцов первой матрицы не равно числу строк второй матрицы.")
+
+    # Умножаем матрицы.
+    temp_file = os.path.join(output_folder, "temp_results.txt")
+    result_matrix = multiply_matrices(matrix_a, matrix_b, os.cpu_count(), temp_file)
+    result_file = os.path.join(output_folder, 'result_matrix.txt')
+    write_matrix_to_file(result_file, result_matrix)
+
+    print(f"Результирующая матрица сохранена в {result_file}. Промежуточные результаты записаны в {temp_file}.")
+
+    # Асинхронное выполнение.
+    stop_signal = multiprocessing.Event()
+    async_process = multiprocessing.Process(
+        target=async_matrix_tasks,
+        args=(matrix_size, stop_signal, output_folder)
+    )
+
+    async_process.start()
+    time.sleep(10)  # Даем процессу поработать 10 секунд.
+    stop_signal.set()  # Устанавливаем сигнал остановки.
+    async_process.join()
+    print("Асинхронные операции завершены.")
